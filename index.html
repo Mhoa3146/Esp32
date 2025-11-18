@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Light Monitor Dashboard</title>
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="container">
+        <header>
+            <h1>ระบบติดตามสถานะไฟ</h1>
+        </header>
+
+        <div class="control-panel">
+            <button id="btnRefresh" class="btn-refresh">🔄 อัปเดตข้อมูลล่าสุด</button>
+            <span id="lastUpdate">ยังไม่อัปเดต</span>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>สถานะ</th>
+                        <th>เวลาที่ปิด-เปิด</th>
+                    </tr>
+                </thead>
+                <tbody id="logTableBody">
+                    </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
