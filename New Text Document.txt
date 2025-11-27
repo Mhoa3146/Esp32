@@ -1,0 +1,566 @@
+-------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+const char* mqtt_server = "023ef5e7dc384a739b05409b387ae2f0.s1.eu.hivemq.cloud";
+const int mqtt_port = 8883;
+const char* mqtt_user = "user11";
+const char* mqtt_pass = "user11ABC";
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+const int pinLock = 32;
+const int pinDoor = 33;
+const int pinButton = 12; 
+
+#define SS_PIN  5
+#define RST_PIN 22
+MFRC522 rfid(SS_PIN, RST_PIN);
+byte authorizedUID[4] = {0x24, 0xA5, 0x9A, 0x2B};
+
+const char* t_cmd_lock  = "home/security/lock/cmd";
+const char* t_stat_lock = "home/security/lock/status";
+const char* t_cmd_door  = "home/security/door/cm1";
+const char* t_stat_door = "home/security/door/status";
+
+bool isLocked = true;
+
+void setup_wifi();
+void reconnect();
+void callback(char* topic, byte* payload, unsigned int length);
+bool checkUID(byte *uid);
+void unlockSystem(String source);
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(pinLock, OUTPUT);
+  pinMode(pinDoor, OUTPUT);
+  pinMode(pinButton, INPUT_PULLUP);
+
+  digitalWrite(pinLock, LOW);
+  digitalWrite(pinDoor, LOW);
+
+  SPI.begin();
+  rfid.PCD_Init();
+
+  
+  espClient.setInsecure();
+
+  setup_wifi();
+
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+void loop() {
+  if (!client.connected()) reconnect();
+  client.loop();
+
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    if (checkUID(rfid.uid.uidByte)) unlockSystem("RFID Card");
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+  }
+
+  if (digitalRead(pinButton) == LOW) {
+    
+    delay(50);
+    
+    if (digitalRead(pinButton) == LOW) {
+        
+        if (isLocked) {
+            Serial.println("Button Click -> Unlock");
+            unlockSystem("Button Sim");
+        } else {
+            Serial.println("Button Click (Already Unlocked)");
+        }
+
+        while (digitalRead(pinButton) == LOW) {
+            delay(10); 
+        }
+        delay(100);
+    }
+  }
+}
+
+void unlockSystem(String source) {
+    Serial.println(">>> UNLOCKED by: " + source);
+    isLocked = false;
+    digitalWrite(pinLock, HIGH);
+    client.publish(t_stat_lock, "UNLOCK");
+}
+
+bool checkUID(byte *uid) {
+  for (int i = 0; i < 4; i++) {
+    if (uid[i] != authorizedUID[i]) return false;
+  }
+  return true;
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+  String strTopic = String(topic);
+
+  Serial.print("MQTT CMD: "); Serial.println(msg);
+
+  if (strTopic == t_cmd_lock) {
+      if (msg == "UNLOCK") unlockSystem("Web/MQTT Command");
+      else if (msg == "LOCK") {
+          isLocked = true;
+          digitalWrite(pinLock, LOW);
+          digitalWrite(pinDoor, LOW);
+          client.publish(t_stat_door, "CLOSE");
+          client.publish(t_stat_lock, "LOCK");
+      }
+  }
+  else if (strTopic == t_cmd_door) {
+      if (isLocked) {
+          Serial.println("Error: System is Locked!");
+          return;
+      }
+      if (msg == "OPEN") {
+          digitalWrite(pinDoor, HIGH);
+          client.publish(t_stat_door, "OPEN");
+      } else if (msg == "CLOSE") {
+          digitalWrite(pinDoor, LOW);
+          client.publish(t_stat_door, "CLOSE");
+      }
+  }
+}
+
+void setup_wifi() {
+  delay(10);
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Connected");
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Connecting to HiveMQ Cloud...");
+    
+    if (client.connect("ESP32_Secure_Client", mqtt_user, mqtt_pass)) {
+      Serial.println("Connected!");
+      client.subscribe(t_cmd_lock);
+      client.subscribe(t_cmd_door);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5s");
+      delay(5000);
+    }
+  }
+}
+
+
+
+
+
+
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+// --- WiFi Configuration ---
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+// --- MQTT Configuration ---
+const char* mqtt_server = "023ef5e7dc384a739b05409b387ae2f0.s1.eu.hivemq.cloud";
+const int mqtt_port = 8883;
+const char* mqtt_user = "user11";
+const char* mqtt_pass = "user11ABC";
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+// --- Pin Definitions ---
+const int pinLock = 32;  // Relay ควบคุมระบบล็อค
+const int pinDoor = 33;  // Relay ควบคุมกลอนประตู
+// ตัด pinButton ออกแล้ว
+
+// --- RFID Configuration ---
+#define SS_PIN  5
+#define RST_PIN 22
+MFRC522 rfid(SS_PIN, RST_PIN);
+byte authorizedUID[4] = {0x24, 0xA5, 0x9A, 0x2B}; // รหัสบัตรที่อนุญาต
+
+// --- MQTT Topics ---
+const char* t_cmd_lock  = "home/security/lock/cmd";
+const char* t_stat_lock = "home/security/lock/status";
+const char* t_cmd_door  = "home/security/door/cm1";
+const char* t_stat_door = "home/security/door/status";
+
+bool isLocked = true;
+
+// --- Function Prototypes ---
+void setup_wifi();
+void reconnect();
+void callback(char* topic, byte* payload, unsigned int length);
+bool checkUID(byte *uid);
+void openDoorSequence(String source); 
+
+void setup() {
+  Serial.begin(115200);
+
+  // Setup Output Pins (ตัด input ปุ่มกดออก)
+  pinMode(pinLock, OUTPUT);
+  pinMode(pinDoor, OUTPUT);
+  
+  // เริ่มต้นสถานะ: ปิด
+  digitalWrite(pinLock, LOW);
+  digitalWrite(pinDoor, LOW);
+
+  // Setup RFID
+  SPI.begin();
+  rfid.PCD_Init();
+
+  // Setup Network
+  espClient.setInsecure();
+  setup_wifi();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+void loop() {
+  // 1. ดูแลการเชื่อมต่อ MQTT
+  if (!client.connected()) reconnect();
+  client.loop();
+
+  // 2. ตรวจสอบ RFID (เหลือแค่อันนี้เป็นตัวสั่งงานหลัก)
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    // แสดง UID ที่อ่านได้ใน Serial Monitor (เผื่อเช็ค)
+    Serial.print("Card UID: ");
+    for (byte i = 0; i < rfid.uid.size; i++) {
+      Serial.print(rfid.uid.uidByte[i] < 0x10 ? " 0" : " ");
+      Serial.print(rfid.uid.uidByte[i], HEX);
+    }
+    Serial.println();
+
+    // ตรวจสอบความถูกต้อง
+    if (checkUID(rfid.uid.uidByte)) {
+      openDoorSequence("RFID Card"); // ถ้าถูก -> เปิดประตู 5 วิ
+    } else {
+      Serial.println("Access Denied!");
+    }
+
+    // หยุดอ่านบัตรซ้ำ
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+  }
+}
+
+// --- ฟังก์ชันเปิดประตู 5 วินาที ---
+void openDoorSequence(String source) {
+    Serial.println(">>> ACCESS GRANTED by: " + source);
+    
+    // 1. ปลดล็อคระบบ (เพื่อให้สถานะถูกต้อง)
+    if (isLocked) {
+        isLocked = false;
+        digitalWrite(pinLock, HIGH);
+        client.publish(t_stat_lock, "UNLOCK");
+        delay(200); 
+    }
+
+    // 2. เปิดประตู
+    Serial.println("Opening Door...");
+    digitalWrite(pinDoor, HIGH);
+    client.publish(t_stat_door, "OPEN");
+    
+    // 3. รอ 5 วินาที
+    Serial.println("Waiting 5 seconds...");
+    delay(5000); 
+
+    // 4. ปิดประตู
+    Serial.println("Closing Door...");
+    digitalWrite(pinDoor, LOW);
+    client.publish(t_stat_door, "CLOSE");
+}
+
+bool checkUID(byte *uid) {
+  for (int i = 0; i < 4; i++) {
+    if (uid[i] != authorizedUID[i]) return false;
+  }
+  return true;
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+  String strTopic = String(topic);
+
+  Serial.print("MQTT CMD: "); Serial.println(msg);
+
+  if (strTopic == t_cmd_lock) {
+      if (msg == "UNLOCK") {
+          isLocked = false;
+          digitalWrite(pinLock, HIGH);
+          client.publish(t_stat_lock, "UNLOCK");
+      }
+      else if (msg == "LOCK") {
+          isLocked = true;
+          digitalWrite(pinLock, LOW);
+          digitalWrite(pinDoor, LOW);
+          client.publish(t_stat_door, "CLOSE");
+          client.publish(t_stat_lock, "LOCK");
+          Serial.println("LOCKED via MQTT");
+      }
+  }
+  else if (strTopic == t_cmd_door) {
+      if (isLocked) {
+          Serial.println("Error: System is Locked!");
+          return;
+      }
+      if (msg == "OPEN") {
+          digitalWrite(pinDoor, HIGH);
+          client.publish(t_stat_door, "OPEN");
+      } else if (msg == "CLOSE") {
+          digitalWrite(pinDoor, LOW);
+          client.publish(t_stat_door, "CLOSE");
+      }
+  }
+}
+
+void setup_wifi() {
+  delay(10);
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Connected");
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Connecting to HiveMQ...");
+    if (client.connect("ESP32_ID", mqtt_user, mqtt_pass)) {
+      Serial.println("Connected!");
+      client.subscribe(t_cmd_lock);
+      client.subscribe(t_cmd_door);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      delay(5000);
+    }
+  }
+}
+
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+
+const char* mqtt_server = "023ef5e7dc384a739b05409b387ae2f0.s1.eu.hivemq.cloud";
+const int mqtt_port = 8883;
+const char* mqtt_user = "user11";
+const char* mqtt_pass = "user11ABC";
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+const int pinLock = 32;   
+const int pinDoor = 33;   
+const int pinButton = 12;
+
+#define SS_PIN  5
+#define RST_PIN 22
+MFRC522 rfid(SS_PIN, RST_PIN);
+byte authorizedUID[4] = {0x24, 0xA5, 0x9A, 0x2B};
+
+const char* t_cmd_lock  = "home/security/lock/cmd";
+const char* t_stat_lock = "home/security/lock/status";
+const char* t_cmd_door  = "home/security/door/cm1";
+const char* t_stat_door = "home/security/door/status";
+
+bool isLocked = true;
+
+void setup_wifi();
+void reconnect();
+void callback(char* topic, byte* payload, unsigned int length);
+bool checkUID(byte *uid);
+void openDoorSequence(String source); 
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(pinLock, OUTPUT);
+  pinMode(pinDoor, OUTPUT);
+  pinMode(pinButton, INPUT_PULLUP);
+  
+  digitalWrite(pinLock, LOW);
+  digitalWrite(pinDoor, LOW);
+
+  SPI.begin();
+  rfid.PCD_Init();
+
+  espClient.setInsecure();
+  setup_wifi();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+}
+
+void loop() {
+  
+  if (!client.connected()) reconnect();
+  client.loop();
+
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    
+    Serial.print("Card UID: ");
+    for (byte i = 0; i < rfid.uid.size; i++) {
+      Serial.print(rfid.uid.uidByte[i] < 0x10 ? " 0" : " ");
+      Serial.print(rfid.uid.uidByte[i], HEX);
+    }
+    Serial.println();
+
+    if (checkUID(rfid.uid.uidByte)) {
+      openDoorSequence("RFID Card");
+    } else {
+      Serial.println("Access Denied!");
+    }
+
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+  }
+
+  if (digitalRead(pinButton) == LOW) {
+      delay(50);
+      if (digitalRead(pinButton) == LOW) {
+        
+          openDoorSequence("Button Simulation"); 
+
+          while(digitalRead(pinButton) == LOW) {
+              delay(10);
+          }
+      }
+  }
+}
+
+void openDoorSequence(String source) {
+    Serial.println(">>> ACCESS GRANTED by: " + source);
+    
+    if (isLocked) {
+        isLocked = false;
+        digitalWrite(pinLock, HIGH);
+        client.publish(t_stat_lock, "UNLOCK");
+        delay(200); 
+    }
+
+    Serial.println("Opening Door...");
+    digitalWrite(pinDoor, HIGH);
+    client.publish(t_stat_door, "OPEN");
+    
+    Serial.println("Waiting 5 seconds...");
+    delay(5000); 
+
+    Serial.println("Closing Door...");
+    digitalWrite(pinDoor, LOW);
+    client.publish(t_stat_door, "CLOSE");
+}
+
+bool checkUID(byte *uid) {
+  for (int i = 0; i < 4; i++) {
+    if (uid[i] != authorizedUID[i]) return false;
+  }
+  return true;
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+  String strTopic = String(topic);
+
+  Serial.print("MQTT CMD: "); Serial.println(msg);
+
+  if (strTopic == t_cmd_lock) {
+      if (msg == "UNLOCK") {
+          isLocked = false;
+          digitalWrite(pinLock, HIGH);
+          client.publish(t_stat_lock, "UNLOCK");
+      }
+      else if (msg == "LOCK") {
+          isLocked = true;
+          digitalWrite(pinLock, LOW);
+          digitalWrite(pinDoor, LOW);
+          client.publish(t_stat_door, "CLOSE");
+          client.publish(t_stat_lock, "LOCK");
+          Serial.println("LOCKED via MQTT");
+      }
+  }
+  else if (strTopic == t_cmd_door) {
+      if (isLocked) {
+          Serial.println("Error: System is Locked!");
+          return;
+      }
+      if (msg == "OPEN") {
+          digitalWrite(pinDoor, HIGH);
+          client.publish(t_stat_door, "OPEN");
+      } else if (msg == "CLOSE") {
+          digitalWrite(pinDoor, LOW);
+          client.publish(t_stat_door, "CLOSE");
+      }
+  }
+}
+
+void setup_wifi() {
+  delay(10);
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("Connected");
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Connecting to HiveMQ...");
+    if (client.connect("ESP32_ID", mqtt_user, mqtt_pass)) {
+      Serial.println("Connected!");
+      client.subscribe(t_cmd_lock);
+      client.subscribe(t_cmd_door);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      delay(5000);
+    }
+  }
+}
